@@ -1,4 +1,5 @@
 import logging
+import json
 
 from dotenv import load_dotenv
 from livekit.agents import (
@@ -12,8 +13,6 @@ from livekit.agents import (
     cli,
     metrics,
     tokenize,
-    # function_tool,
-    # RunContext
 )
 from livekit.plugins import murf, silero, google, deepgram, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
@@ -23,83 +22,94 @@ logger = logging.getLogger("agent")
 load_dotenv(".env.local")
 
 
+# -------------------------------
+#  BARISTA ASSISTANT CLASS
+# -------------------------------
 class Assistant(Agent):
-    def __init__(self) -> None:
+    def __init__(self):
         super().__init__(
-            instructions="""You are a helpful voice AI assistant. The user is interacting with you via voice, even if you perceive the conversation as text.
-            You eagerly assist users with their questions by providing information from your extensive knowledge.
-            Your responses are concise, to the point, and without any complex formatting or punctuation including emojis, asterisks, or other symbols.
-            You are curious, friendly, and have a sense of humor.""",
+            instructions="""
+You are a friendly coffee shop barista.
+Your job is to take the user's coffee order.
+Ask questions until you fill all fields in the order:
+
+drink type
+size
+milk preference
+extras
+customer name
+
+After collecting a field, confirm briefly.
+When the order is complete, say the summary.
+
+Keep responses short and friendly.
+"""
         )
 
-    # To add tools, use the @function_tool decorator.
-    # Here's an example that adds a simple weather tool.
-    # You also have to add `from livekit.agents import function_tool, RunContext` to the top of this file
-    # @function_tool
-    # async def lookup_weather(self, context: RunContext, location: str):
-    #     """Use this tool to look up current weather information in the given location.
-    #
-    #     If the location is not supported by the weather service, the tool will indicate this. You must tell the user the location's weather is unavailable.
-    #
-    #     Args:
-    #         location: The location to look up weather information for (e.g. city name)
-    #     """
-    #
-    #     logger.info(f"Looking up weather for {location}")
-    #
-    #     return "sunny with a temperature of 70 degrees."
+        # Order state for the session
+        self.order = {
+            "drinkType": "",
+            "size": "",
+            "milk": "",
+            "extras": [],
+            "name": ""
+        }
+
+    def is_order_complete(self):
+        return (
+            self.order["drinkType"] != "" and
+            self.order["size"] != "" and
+            self.order["milk"] != "" and
+            self.order["name"] != ""
+        )
+
+    def next_question(self):
+        if not self.order["drinkType"]:
+            return "What type of drink would you like?"
+        if not self.order["size"]:
+            return "What size would you prefer? Small, medium, or large?"
+        if not self.order["milk"]:
+            return "What kind of milk would you like?"
+        if len(self.order["extras"]) == 0:
+            return "Any extras like sugar, whipped cream, or caramel?"
+        if not self.order["name"]:
+            return "May I have your name for the order?"
+        return None
 
 
+# -------------------------------
+#  PREWARM VAD
+# -------------------------------
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
 
 
+# -------------------------------
+#  ENTRYPOINT
+# -------------------------------
 async def entrypoint(ctx: JobContext):
-    # Logging setup
-    # Add any other context you want in all log entries here
-    ctx.log_context_fields = {
-        "room": ctx.room.name,
-    }
+    ctx.log_context_fields = {"room": ctx.room.name}
 
-    # Set up a voice AI pipeline using OpenAI, Cartesia, AssemblyAI, and the LiveKit turn detector
+    # Voice pipeline: STT + LLM + TTS
     session = AgentSession(
-        # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
-        # See all available models at https://docs.livekit.io/agents/models/stt/
         stt=deepgram.STT(model="nova-3"),
-        # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
-        # See all available models at https://docs.livekit.io/agents/models/llm/
+
         llm=google.LLM(
-                model="gemini-2.5-flash",
-            ),
-        # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
-        # See all available models as well as voice selections at https://docs.livekit.io/agents/models/tts/
+            model="gemini-2.5-flash",
+        ),
+
         tts=murf.TTS(
-                voice="en-US-matthew", 
-                style="Conversation",
-                tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
-                text_pacing=True
-            ),
-        # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
-        # See more at https://docs.livekit.io/agents/build/turns
+            voice="en-US-matthew",
+            style="Conversation",
+            tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
+            text_pacing=True
+        ),
+
         turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
-        # allow the LLM to generate a response while waiting for the end of turn
-        # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
         preemptive_generation=True,
     )
 
-    # To use a realtime model instead of a voice pipeline, use the following session setup instead.
-    # (Note: This is for the OpenAI Realtime API. For other providers, see https://docs.livekit.io/agents/models/realtime/))
-    # 1. Install livekit-agents[openai]
-    # 2. Set OPENAI_API_KEY in .env.local
-    # 3. Add `from livekit.plugins import openai` to the top of this file
-    # 4. Use the following session setup instead of the version above
-    # session = AgentSession(
-    #     llm=openai.realtime.RealtimeModel(voice="marin")
-    # )
-
-    # Metrics collection, to measure pipeline performance
-    # For more information, see https://docs.livekit.io/agents/build/metrics/
     usage_collector = metrics.UsageCollector()
 
     @session.on("metrics_collected")
@@ -113,27 +123,75 @@ async def entrypoint(ctx: JobContext):
 
     ctx.add_shutdown_callback(log_usage)
 
-    # # Add a virtual avatar to the session, if desired
-    # # For other providers, see https://docs.livekit.io/agents/models/avatar/
-    # avatar = hedra.AvatarSession(
-    #   avatar_id="...",  # See https://docs.livekit.io/agents/models/avatar/plugins/hedra
-    # )
-    # # Start the avatar and wait for it to join
-    # await avatar.start(session, room=ctx.room)
+    # Start the barista session
+    agent = Assistant()
 
-    # Start the session, which initializes the voice pipeline and warms up the models
     await session.start(
-        agent=Assistant(),
+        agent=agent,
         room=ctx.room,
         room_input_options=RoomInputOptions(
-            # For telephony applications, use `BVCTelephony` for best results
             noise_cancellation=noise_cancellation.BVC(),
         ),
     )
 
-    # Join the room and connect to the user
+    # -------------------------------
+    #  BARISTA ORDER LOGIC
+    # -------------------------------
+    @session.on("transcription")
+    async def on_user_speaks(evt):
+        user_text = evt.text.lower()
+
+        # Fill order fields
+        if not agent.order["drinkType"]:
+            agent.order["drinkType"] = user_text
+
+        elif not agent.order["size"]:
+            agent.order["size"] = user_text
+
+        elif not agent.order["milk"]:
+            agent.order["milk"] = user_text
+
+        elif len(agent.order["extras"]) == 0:
+            if "no" in user_text:
+                agent.order["extras"] = []
+            else:
+                agent.order["extras"] = [user_text]
+
+        elif not agent.order["name"]:
+            agent.order["name"] = user_text
+
+        # Ask next question
+        if not agent.is_order_complete():
+            q = agent.next_question()
+            await session.say(q)
+            return
+
+        # -------------------------------
+        #  ORDER COMPLETE → SAVE & CONFIRM
+        # -------------------------------
+        summary = (
+            f"Order confirmed. A {agent.order['size']} {agent.order['drinkType']} "
+            f"with {agent.order['milk']} milk"
+        )
+        if agent.order["extras"]:
+            summary += f" and extras: {', '.join(agent.order['extras'])}"
+        summary += f" for {agent.order['name']}."
+
+        await session.say(summary)
+
+        # Save order to file
+        with open("orders.json", "a") as f:
+            json.dump(agent.order, f)
+            f.write("\n")
+
+        await session.say("Your order has been saved. Anything else?")
+
+    # Connect user to agent
     await ctx.connect()
 
 
+# -------------------------------
+#  WORKER
+# -------------------------------
 if __name__ == "__main__":
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
