@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
+import { Heart, Heartbeat, Leaf, Moon, TrendUp } from '@phosphor-icons/react';
 import { motion } from 'motion/react';
 import type { AppConfig } from '@/app-config';
 import { ChatTranscript } from '@/components/app/chat-transcript';
@@ -92,6 +93,32 @@ export const SessionView = ({
 
   return (
     <section className="bg-background relative z-10 h-full w-full overflow-hidden" {...props}>
+      {/* Wellness Header */}
+      <div className="flex flex-col gap-4 bg-gradient-to-b from-primary/10 to-transparent px-4 py-6 md:px-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-semibold text-primary">Today's Wellness</h2>
+            <p className="text-xs text-muted-foreground">Keep track of your health metrics</p>
+          </div>
+          <TrendUp className="text-primary" size={24} />
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+          {[
+            { icon: <Heart size={24} />, label: 'Heart Rate', value: '72 bpm', status: 'good' },
+            { icon: <Heartbeat size={24} />, label: 'Activity', value: '8,234 steps', status: 'great' },
+            { icon: <Leaf size={24} />, label: 'Nutrition', value: '6/8 cups', status: 'good' },
+            { icon: <Moon size={24} />, label: 'Sleep', value: '7.5 hrs', status: 'good' },
+          ].map((stat, idx) => (
+            <div key={idx} className="flex flex-col items-center gap-2 rounded-lg bg-card/50 p-3 backdrop-blur-sm transition-all hover:bg-card/80">
+              <div className="text-2xl text-primary">{stat.icon}</div>
+              <p className="text-xs font-medium text-muted-foreground">{stat.label}</p>
+              <p className="text-sm font-bold text-primary">{stat.value}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
       {/* Chat Transcript */}
       <div
         className={cn(
@@ -122,6 +149,7 @@ export const SessionView = ({
         )}
         <div className="bg-background relative mx-auto max-w-2xl pb-3 md:pb-12">
           <Fade bottom className="absolute inset-x-0 top-0 h-4 -translate-y-full" />
+          
           <AgentControlBar controls={controls} onChatOpenChange={setChatOpen} />
         </div>
       </MotionBottom>
